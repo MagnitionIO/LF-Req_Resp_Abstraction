@@ -1,0 +1,286 @@
+target C {
+    cmake-include: [
+        "../../req_rsp_layer/translation.cmake",
+        "../../utils/utils.cmake",
+        "abstracts/abstracts.cmake"
+        ],
+    files: [
+            "abstracts/defs.h",
+            "abstracts/defs.c",
+            "../../utils/utils.h",
+            "../../utils/queue.h",
+            "../../utils/queue.c",
+            "../../utils/map.h",
+            "../../utils/map.c",
+            "../../req_rsp_layer/translation.h",
+            "../../req_rsp_layer/translation.c"
+        ],
+    keepalive: true,
+    workers: 1,
+//    logging:debug,
+    fast:true,
+};
+
+preamble {=
+    #include "utils.h"
+    #include "queue.h"
+    #include "defs.h"
+    #include "translation.h"
+    #include "map.h"
+
+    #define DEF_MAP_SIZE            5
+    #define DEF_RESIZE_THRESHOLD    0.85
+=}
+
+reactor client (cache_index:int(0), total_refs:{=unsigned int=}(10), min_interval:time(1 ms)) {
+    state ref_counter:uint64_t(0);
+    state _lbn:int64_t(0);
+    state rand_seed:{=unsigned int=}(10);
+    state terminate:bool (false);
+    state acc_rtt:interval_t(0);
+    state finished_refs:uint32_t(1);
+    state connector_id:uint32_t(0);
+    state client_connector:connector_t;
+    state connector_map:map_t;
+
+    output batch_request:cache__ctrl__req;
+    input workstream_rsp:cache__ctrl__interim_rsp;
+    input batch_response:uint32_t;
+
+    logical action sch_ref(0);
+    
+    reaction (startup) -> sch_ref {=
+        connector_t *con = &self->client_connector;
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "CLIENT[%d] initialized",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   self->cache_index
+        );
+
+        init_map (&self->connector_map, DEF_MAP_SIZE, DEF_RESIZE_THRESHOLD, "CLIENT_MAP", self->cache_index, 0);
+        init_connector (con, self->cache_index, "CLIENT", self->connector_id++);
+        setup_rsp_interim_input_type(con, self->_lf_workstream_rsp, &self->_lf_workstream_rsp->value, sizeof (self->_lf_workstream_rsp->value), 1, &self->_lf_workstream_rsp->is_present, client_interim_response);
+        setup_rsp_input_type_1(con, self->_lf_batch_response, &self->_lf_batch_response->value, sizeof (self->_lf_batch_response->value), 1, &self->_lf_batch_response->is_present, client_response);
+        setup_req_scheduler_type_1(con, &self->_lf_sch_ref, NULL, 0, 0, schedule_reference);
+        setup_type_1_output(con, &self->_lf_batch_request, &self->_lf_batch_request.value, sizeof(self->_lf_batch_request.value), 1, &self->_lf_batch_request.is_present, NULL);
+        insert (&self->connector_map, &self->_lf_sch_ref, &self->client_connector);
+        insert (&self->connector_map, self->_lf_workstream_rsp, &self->client_connector);
+        insert (&self->connector_map, self->_lf_batch_response, &self->client_connector);
+        lf_schedule (sch_ref, 0);
+    =}
+
+    reaction (sch_ref) -> batch_request, sch_ref {=
+        bool ret_val = connector_process_scheduler (&self->connector_map, sch_ref);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "CLIENT[%d] Scheduling Fetch ret:%s",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, ret_val ? "TRUE" : "FALSE"
+        );
+        ++self->ref_counter;
+        if (self->ref_counter >= self->total_refs) {
+            self->terminate = true;
+            log_debug ("(%lld, %u) physical_time:%lld "
+                    "CLIENT[%d] Setting up terminate flag refs:%u total_refs:%u",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, self->ref_counter, self->total_refs
+            );
+            return;
+        }
+        interval_t next_sch = (rand_r(&self->rand_seed) % 10) + 1;
+        next_sch = self->min_interval * (next_sch % 5 + 1);
+        connector_schedule_next(&self->connector_map, &self->_lf_sch_ref, next_sch);
+    =}
+
+    reaction (workstream_rsp) {=
+        int64_t event_id = connector_process_input (&self->connector_map, workstream_rsp);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "CLIENT[%d] Filling block event_id:%lld",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, event_id
+        );
+    =}
+
+    reaction(batch_response) {=
+        int64_t event_id = connector_process_input (&self->connector_map, batch_response);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "CLIENT[%d] FINISHED request event_id:%lld",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, event_id
+        );
+
+        if (self->terminate) {
+            log_debug ( "(%lld, %u) physical_time:%lld "
+                        "CLIENT[%d] TERMINATING_SIMULATION",
+                        lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                        self->cache_index
+            );
+            lf_request_stop();
+        }
+    =}
+
+    reaction (shutdown) {=
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "CLIENT[%d] SHUTDOWN",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index
+        );
+        connector_service_stats (self->client_connector);
+    =}
+}
+
+reactor dispatcher (cache_index:int(0), sub_block_size:int(512), subblock_sectors:int(8)) {
+    input batch_request:cache__ctrl__req;
+    logical action storage_req_trigger(0);
+    output workstream_req:ctrl__storage__req;
+    input workstream_rsp:uint32_t;
+    output workstream_response:cache__ctrl__interim_rsp;
+    output batch_response:uint32_t;
+
+    state client_connector:connector_t;
+    state worker_connector:connector_t;
+    state connector_map:map_t;
+    state connector_id:uint32_t(0);
+
+    reaction (startup) {=
+        connector_t *client_con = &self->client_connector;
+        connector_t *worker_con = &self->worker_connector;
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "DISPATCHER[%d] initialized, default sub_block_size:%d",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   self->cache_index, self->sub_block_size
+        );
+
+        init_map (&self->connector_map, DEF_MAP_SIZE, DEF_RESIZE_THRESHOLD, "DISPATCHER_MAP", self->cache_index, 0);
+        init_connector (client_con, self->cache_index, "TOWARDS_CLIENT", self->connector_id++);
+        init_connector (worker_con, self->cache_index, "TOWARDS_WORKER", self->connector_id++);
+//        setup_type_1_output(worker_con, &self->_lf_workstream_req, &self->_lf_workstream_req.value, sizeof(self->_lf_workstream_req.value), 1, &self->_lf_workstream_req.is_present, NULL);
+        setup_type_1_output_(worker_con, ((dispatcher_workstream_req_t *)&self->_lf_workstream_req), 1, NULL);
+        setup_type_1_output_(client_con, ((dispatcher_batch_response_t *)&self->_lf_batch_response), 1, NULL);
+        setup_interim_output_(client_con, ((dispatcher_workstream_response_t *)&self->_lf_workstream_response), 1, NULL);
+        setup_req_input_type_2_(client_con, self->_lf_batch_request, 1, process_batch_request);
+        setup_rsp_input_type_2_(worker_con, self->_lf_workstream_rsp, 1, process_disk_response);
+        setup_req_scheduler_type_2_(worker_con, ((dispatcher_storage_req_trigger_t *) &self->_lf_storage_req_trigger), schedule_disk_request);
+        
+        insert (&self->connector_map, self->_lf_batch_request, client_con);
+        insert (&self->connector_map, self->_lf_workstream_rsp, worker_con);
+        insert (&self->connector_map, &self->_lf_storage_req_trigger, worker_con);
+
+        link_connectors (client_con, worker_con);
+    =}
+
+    reaction (batch_request) -> storage_req_trigger {=
+        int64_t event_id = connector_process_input (&self->connector_map, batch_request);
+        cache__ctrl__req *req = &batch_request->value;
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "DISPATCHER[%d] Fetch Request id:%u cache_id[%d] lbn:%llu len:%u ts:%llu event_id:%lld",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   self->cache_index, req->id, req->cache_id, req->lbn, req->len, req->ts, event_id
+        );
+    =}
+
+    reaction (storage_req_trigger) -> workstream_req, storage_req_trigger {=
+        bool ret_val = connector_process_scheduler (&self->connector_map, storage_req_trigger);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "DISPATCHER[%d] Sending Request to disk ret:%s",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, ret_val ? "TRUE" : "FALSE"
+        );
+    =}
+
+    reaction (workstream_rsp) -> workstream_response, batch_response {=
+        int64_t event_id = connector_process_input (&self->connector_map, workstream_rsp);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "DISPATCHER[%d] Received Response from disk id:%u ret:%lld",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, workstream_rsp->value, event_id
+        );
+    =}
+
+    reaction (shutdown) {=
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "DISPATCHER[%d] SHUTDOWN",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index
+        );
+        connector_service_stats (self->client_connector);
+        connector_service_stats (self->worker_connector);
+    =}
+}
+
+reactor worker (cache_index:int(0), default_read_time:time (1 ms)) {
+    state block_read_time:time (default_read_time);
+
+    input task:ctrl__storage__req;
+    logical action fetch_page(0):uint32_t;
+    output task_result:uint32_t;
+
+    state worker_connector:connector_t;
+    state connector_map:map_t;
+    state connector_id:uint32_t(0);
+    
+    reaction (startup) {=
+        connector_t *con = &self->worker_connector;
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "WORKER[%d] initialized, block_read_time:%llu",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   self->cache_index, self->block_read_time
+        );
+
+        init_map (&self->connector_map, DEF_MAP_SIZE, DEF_RESIZE_THRESHOLD, "WORKER_MAP", self->cache_index, 0);
+        init_connector (con, self->cache_index, "WORKER", self->connector_id++);
+        setup_req_input_type_1(con, self->_lf_task, &self->_lf_task->value, sizeof (self->_lf_task->value), 1, &self->_lf_task->is_present, enqueue_task);
+        setup_type_1_output(con, &self->_lf_task_result, &self->_lf_task_result.value, sizeof(self->_lf_task_result.value), 1, &self->_lf_task_result.is_present, NULL);
+        setup_rsp_scheduler_type_1(con, &self->_lf_fetch_page, &self->_lf_fetch_page.value, sizeof (self->_lf_fetch_page.value), 1, emulate_delay);
+        insert (&self->connector_map, self->_lf_task, &self->worker_connector);
+        insert (&self->connector_map, &self->_lf_fetch_page, &self->worker_connector);
+    =}
+
+    reaction (task) -> fetch_page {=
+        int64_t event_id = connector_process_input (&self->connector_map, task);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "WORKER[%d] p_enqueue event_id:%lld",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, event_id
+        );
+        if (event_id < 0) {
+            log_error ( "(%lld, %u) physical_time:%lld "
+                        "WORKER[%d] FAILED p_enqueue event_id:%lld",
+                        lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                        self->cache_index, event_id
+            );
+            return;
+        }
+
+        connector_schedule_next_copy(&self->connector_map, fetch_page, self->block_read_time, &event_id);
+    =}
+
+    reaction (fetch_page) -> task_result {=
+        bool ret_val = connector_process_scheduler (&self->connector_map, fetch_page);
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "WORKER[%d] Scheduling Fetch ret:%s",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index, ret_val ? "TRUE" : "FALSE"
+        );
+    =}
+
+    reaction (shutdown) {=
+        log_debug ( "(%lld, %u) physical_time:%lld "
+                    "WORKER[%d] SHUTDOWN",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    self->cache_index
+        );
+        connector_service_stats (self->worker_connector);
+    =}
+}
+
+main reactor base {
+    c = new client()
+    f = new dispatcher()
+    d = new worker()
+
+    c.batch_request -> f.batch_request;
+    f.workstream_req -> d.task;
+    d.task_result -> f.workstream_rsp;
+    f.workstream_response -> c.workstream_rsp;
+    f.batch_response -> c.batch_response;
+}
