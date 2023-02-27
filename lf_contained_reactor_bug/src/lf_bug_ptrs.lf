@@ -1,0 +1,184 @@
+target C {
+    cmake-include: [
+        "../../utils/utils.cmake"
+        ],
+    files: [
+            "../../utils/utils.h",
+            "../../utils/queue.h",
+            "../../utils/queue.c",
+            "../../utils/map.h",
+            "../../utils/map.c"
+        ],
+    keepalive: true,
+    workers: 3,
+    fast:true,
+};
+
+preamble {=
+    #include "utils.h"
+    #include "queue.h"
+    typedef struct request {
+        uint32_t id;
+        uint64_t ts;
+    } request_t;
+
+    typedef struct response {
+        request_t req;
+        uint64_t rsp_ts;
+    } response_t;
+=}
+
+reactor input_flow (max_refs:int(10), rate:time(1 s)) {
+    input resp:response_t*;
+    output rqst:request_t*;
+
+    logical action sch_input(0);
+
+    state req_itr:int(0);
+    state terminate:bool (false);
+
+    reaction (startup) -> sch_input {=
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "INPUT_FLOW initialized, # of refs:%d",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   self->max_refs
+        );
+        lf_schedule (sch_input, self->rate);
+    =}
+
+    reaction (sch_input) -> sch_input, rqst {=
+        request_t *req = calloc (1, sizeof (request_t));
+        req->id = self->req_itr++;
+        req->ts = lf_time_logical_elapsed(),
+        
+        log_debug ("(%lld, %u) physical_time:%lld "
+                   "INPUT_FLOW Scheduling fetch req:%p id:%u ts:%llu",
+                   lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                   req, req->id, req->ts
+        );
+
+        lf_set (rqst, req);
+        if (self->req_itr < self->max_refs) {
+            lf_schedule (sch_input, self->rate);
+        } else {
+            self->terminate = true;
+        }
+    =}
+
+    reaction (resp) {=
+        response_t *rsp = resp->value;
+        request_t *req = &rsp->req;
+
+        log_debug ("(%lld, %u) physical_time:%lld "
+                    "INPUT_FLOW Received response rsp:%p id:%u req_ts:%llu res_ts:%llu",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    rsp, req->id, req->ts, rsp->rsp_ts
+        );
+
+        if (self->terminate) {
+            lf_request_stop();
+        }
+    =}
+}
+
+reactor storage (delay:time (1 ms)) {
+    output resp:response_t*;
+    input rqst:request_t*;
+
+    logical action sch_delay(0):request_t*;
+
+    reaction (startup) {=
+        log_debug ("(%lld, %u) physical_time:%lld "
+                    "STORAGE init",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed()
+        );
+    =}
+
+    reaction (sch_delay) -> resp {=
+        request_t *req = sch_delay->value;
+        response_t *rsp = calloc (1, sizeof (response_t));
+        rsp->req = *req;
+        rsp->rsp_ts = lf_time_logical_elapsed();
+
+        log_debug ("(%lld, %u) physical_time:%lld "
+                    "STORAGE Sending back response:%p id:%u req_ts:%llu",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    rsp, req->id, req->ts
+        );
+        lf_set (resp, rsp);
+    =}
+
+    reaction (rqst) -> sch_delay {=
+        request_t *req = rqst->value;
+        log_debug ("(%lld, %u) physical_time:%lld "
+                    "STORAGE Received request:%p id:%u req_ts:%llu",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                    req, req->id, req->ts
+        );
+        lf_schedule_copy (sch_delay, self->delay, req, 1);
+    =}
+}
+
+reactor cache (name:string("cache")) {
+    output response:response_t*;
+    input request:request_t*;
+
+    state fetch:bool(true);
+
+    strg = new storage()
+    reaction (startup) {=
+        log_debug ("(%lld, %u) physical_time:%lld "
+                    "CACHE init",
+                    lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed()
+        );
+    =}
+
+    reaction (request, strg.resp) -> strg.rqst, response {=
+        if (request->is_present) {
+            request_t *req = request->value;
+            log_debug ("(%lld, %u) physical_time:%lld "
+                        "CACHE Received request:%p id:%u req_ts:%llu",
+                        lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                        req, req->id, req->ts
+            );
+
+            if (self->fetch) {
+                log_debug ("(%lld, %u) physical_time:%lld "
+                            "CACHE Fetch enabled for req:%p id:%u req_ts:%llu",
+                            lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                            req, req->id, req->ts
+                );
+                lf_set (strg.rqst, req);
+            } else {
+                response_t *rsp = calloc (1, sizeof (response_t));
+                rsp->req = *req;
+                rsp->rsp_ts = lf_time_logical_elapsed();
+                log_debug ("(%lld, %u) physical_time:%lld "
+                            "CACHE Fetch disabled for req:%p sending resp:%p id:%u req_ts:%llu",
+                            lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                            req, rsp, req->id, req->ts
+                );
+                lf_set (response, rsp);
+            }
+            self->fetch = !self->fetch;
+        } else {
+            response_t *rsp = strg.resp->value;
+            request_t *req = &rsp->req;
+
+            log_debug ("(%lld, %u) physical_time:%lld "
+                        "CACHE Sending response:%p id:%u req_ts:%llu res_ts:%llu",
+                        lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
+                        rsp, req->id, req->ts, rsp->rsp_ts
+            );
+            lf_set (response, rsp);
+        }
+    =}
+}
+
+main reactor {
+    in_flow = new input_flow()
+    c = new cache()
+
+    in_flow.rqst -> c.request;
+    c.response -> in_flow.resp;
+}
