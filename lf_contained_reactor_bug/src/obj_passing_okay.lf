@@ -16,7 +16,6 @@ target C {
 
 preamble {=
     #include "utils.h"
-    #include "queue.h"
     typedef struct request {
         uint32_t id;
         uint64_t ts;
