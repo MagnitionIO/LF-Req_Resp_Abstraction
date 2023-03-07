@@ -147,7 +147,9 @@ reactor cache (name:string("cache")) {
                             lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
                             req, req->id, req->ts
                 );
-                lf_set (strg.rqst, req);
+                request_t *_req = calloc (1, sizeof (request_t));
+                *_req = *req;
+                lf_set (strg.rqst, _req);
             } else {
                 response_t *rsp = calloc (1, sizeof (response_t));
                 rsp->req = *req;
@@ -169,7 +171,9 @@ reactor cache (name:string("cache")) {
                         lf_time_logical_elapsed(), lf_tag().microstep, lf_time_physical_elapsed(),
                         rsp, req->id, req->ts, rsp->rsp_ts
             );
-            lf_set (response, rsp);
+            response_t *_rsp = calloc (1, sizeof (response_t));
+            *_rsp = *rsp;
+            lf_set (response, _rsp);
         }
     =}
 }
