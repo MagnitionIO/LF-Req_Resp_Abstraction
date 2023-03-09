@@ -1,0 +1,83 @@
+target Cpp
+
+public preamble {=
+    #include "RequestResponse/request_response.hh"
+=}
+
+reactor AddService<In, Out> {
+    // this inout port would have input, output, context manager (optional) as parameters
+    // inout would have request as input port, and response as output port
+    inout add_intf: (In, Out)
+
+    logical action request_queue: Request<In>
+
+    reaction(add_intf.request) -> request_queue {=
+        auto delay = std::chrono::milliseconds(rand() % 400 + 100);
+        request_queue.schedule(add_intf.request.get(), delay);
+    =}
+
+    reaction(request_queue) -> add_intf.response {=
+        auto req = request_queue.get();
+        int sum = req->data().first + req->data().second;
+        add_intf.response.set(req->make_response(sum));
+    =}
+}
+
+reactor ContextManager<Req, Resp, Ctx> {
+    input request_in: std::pair<Req, Ctx>
+    output request_out: Req
+
+    input response_in: Resp
+    output response_out: std::pair<Resp, Ctx>
+
+    state context_buffer: {= std::map<unsigned long, Ctx> =}
+
+    reaction (request_in) -> request_out {=
+        const auto& req = request_in.get()->first;
+        const auto& ctx = request_in.get()->second;
+        context_buffer[req.uid()] = ctx;
+        request_out.set(req);
+    =}
+
+    reaction (response_in) -> response_out {=
+        const auto& resp = *response_in.get();
+        const auto& ctx = context_buffer[resp.uid()];
+        response_out.set(std::make_pair(resp, ctx));
+    =}
+}
+
+reactor Client<Out, In> {
+    timer t(0, 100ms)
+    state counter: int(0)
+
+    // this outin port would have output, input, context manager (optional) as parameters
+    // outin would have request as output port, and response as input port
+    outin add_intf: (Out, In, (Out, In, std::function<void(int)>))
+
+    reaction(t) -> add_intf.request {=
+        auto req = Request(std::make_pair(counter, 42));
+        int c = counter; // This is a weird corner case in C++ where the clojure below 
+        // cannot capture counter by value. Copying it to a local variable helps... 
+        auto callback = [c](int sum) {
+            reactor::log::Info() << "Result: " << c << " + 42 = " << sum;
+        };
+        add_intf.set_ctx (req, callback);
+        add_intf.request.set(req);
+
+        reactor::log::Info() << "Client asks what " << counter << " + 42 is";
+        counter++;
+    =}
+
+    reaction(add_intf.response) {=
+        const auto& resp = *add_intf.response.get();
+        const auto& callback = add_intf.get_ctx(resp);
+        callback(resp.data());
+    =}
+}
+
+main reactor {
+    adder = new AddService<{=std::pair<int, int>=}, int> ()
+    client = new Client<{=std::pair<int, int>=}, int>()
+
+    client.add_intf <-> adder.add_intf
+}
