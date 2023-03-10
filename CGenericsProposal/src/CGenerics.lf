@@ -1,0 +1,118 @@
+target C {
+    keepalive: true,
+    // fast: true
+}
+
+preamble {=
+#include <stdio.h>
+
+int convertor_failed(const char *from, const char *from_type, const char *to, const char *to_type)
+{
+    printf("No convertor provided from %s:%s to %s:%s\n", from, from_type, to, to_type);
+    exit(-1);
+}
+
+#define Typename(x) _Generic((x), \
+    int: "int",                   \
+    float: "float",               \
+    double: "double",             \
+    long: "long",                 \
+    char: "char",                 \
+    char*: "string",              \
+    default: "unknown"            \
+)
+
+#define PASTE(x,y) x ## y
+
+#define CALL_CONVERTOR(i, o, in) PASTE(convert__##i, _to__##o)(in)
+
+#define auto_t __auto_type
+
+#define is_same_type(a, b) __builtin_types_compatible_p(__typeof__(a), __typeof__(b))
+
+#define is_same(typename, b) __builtin_types_compatible_p(typename, __typeof__(b))
+
+#define CONVERT(x, y) \
+    _Generic((x), \
+    int: _Generic((y), \
+         float: CALL_CONVERTOR(int, float, x), \
+         double: CALL_CONVERTOR(int, double, x), \
+         long: CALL_CONVERTOR(int, long, x), \
+         default: (__typeof__(y))convertor_failed(#x, Typename(x), #y, Typename(y))), \
+    float: _Generic((y), \
+           int: CALL_CONVERTOR(float, int, x), \
+           double: CALL_CONVERTOR(float, double, x), \
+           long: CALL_CONVERTOR(float, long, x), \
+           default: (__typeof__(y))convertor_failed(#x, Typename(x), #y, Typename(y))), \
+    default: (__typeof__(y))convertor_failed(#x, Typename(x), #y, Typename(y)) \
+)
+
+
+
+float convert__int_to__float(int x) { return (float)(x/223.23); }
+double convert__int_to__double(int x) { return (double)(x); }
+long convert__int_to__long(int x) { return (long)(x); }
+
+
+int convert__double_to__int(double x) { return (int)(x); }
+
+int convert__float_to__int(float x) { return (int)(x*5468); }
+double convert__float_to__double(float x) { return (double)(x); }
+long convert__float_to__long(float x) { return (long)(x); }
+
+=}
+
+reactor Wire<I, O>(latency:int(0)) {
+    input in:int;
+    output out:float;
+    logical action delayed_sch;
+
+    reaction(in) -> delayed_sch {=
+        lf_schedule(delayed_sch, self->latency);
+    =}
+
+    reaction(delayed_sch) in -> out {=
+        if (is_same_type(in->value, out->value))
+        {
+            lf_set(out, in->value);
+        }
+        else
+        {
+            auto_t tmp = CONVERT(in->value, out->value);
+            lf_set(out, tmp);
+        }
+    =}
+}
+
+reactor A {
+    output Aout:int;
+    logical action post;
+
+    timer t(0, 1sec);
+    reaction(t) -> post {=
+        lf_schedule(post, 2);
+    =}
+
+    reaction(post) -> Aout {=
+        lf_set(Aout, rand());
+    =}
+}
+
+reactor B {
+    input Bin:float;
+
+    reaction(Bin) {=
+        printf("got %f\n", Bin->value);
+    =}
+}
+
+main reactor {
+    a = new A();
+    w = new Wire<int, int>(latency=500);
+    b = new B();
+
+    a.Aout -> w.in;
+    w.out -> b.Bin;
+}
+
+// //CTriggerObjectGenerator.java:1046 & 42
