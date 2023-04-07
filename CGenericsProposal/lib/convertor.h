@@ -1,6 +1,8 @@
 #ifndef CONVERTOR_H_
 #define CONVERTOR_H_
 
+#include "types.h"
+
 int convertor_failed(const char *from, const char *from_type, const char *to, const char *to_type);
 
 #define Typename(x) _Generic((x), \
@@ -40,5 +42,10 @@ int convert__double_to__int(double x);
 int convert__float_to__int(float x);
 double convert__float_to__double(float x);
 long convert__float_to__long(float x);
+
+double convert__long_to__double(long x);
+
+B_t convert__A_t_to__B_t(A_t a);
+A_t convert__B_t_to__A_t(B_t b);
 
 #endif // CONVERTOR_H_

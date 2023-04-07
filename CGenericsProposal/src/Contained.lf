@@ -1,5 +1,6 @@
 target C {
     keepalive: true,
+    // fast: true,
     cmake-include: [
         "../lib/lib.cmake"
     ],
@@ -7,14 +8,28 @@ target C {
         "../lib/convertor.h",
         "../lib/convertor.c"
     ]
-    // fast: true
 }
 
 preamble {=
-#include <stdio.h>
-#include "convertor.h"
+    #include "convertor.h"
 =}
 
+reactor B<Input, Type> {
+    input in:Input;
+    // w = new Wire<Input, Type>(latency=10);
+    w = new Wire<int, float>(latency=500);
+    // w2 = new Wire<long, double>(latency=10);
+    // w = new tmp();
+    state req_id:Input;
+
+    reaction(in) -> w.in {=
+        lf_set(w.in, in->value);
+    =}
+
+    reaction(w.out) {=
+        printf("Req#%d Converted: %f\n", self->req_id++, w.out->value);
+    =}
+}
 reactor Wire<Input, Output> (latency:int(0)){
     input in:Input;
     output out:Output;
@@ -37,34 +52,31 @@ reactor Wire<Input, Output> (latency:int(0)){
     =}
 }
 
-reactor A {
-    output Aout:int;
-    logical action post;
+reactor A<Output> {
+    output out:Output;
 
     timer t(0, 1sec);
-    reaction(t) -> post {=
-        lf_schedule(post, 2);
-    =}
-
-    reaction(post) -> Aout {=
-        lf_set(Aout, rand());
+    reaction(t) -> out {=
+        lf_set(out, rand());
     =}
 }
 
-reactor B {
-    input Bin:float;
+reactor tmp {
+    input in:int;
+    output out:int;
 
-    reaction(Bin) {=
-        printf("got %f\n", Bin->value);
+    reaction(in) -> out {=
+        lf_set(out, in->value);
     =}
 }
 
 main reactor {
-    a = new A();
-    w = new Wire<int, float>(latency=500);
-    w2 = new Wire<long, double>(latency=500);
-    b = new B();
+    a = new A<int>();
+    b = new B<int, float>();
+    a.out -> b.in;
 
-    a.Aout -> w.in;
-    w.out -> b.Bin;
+    a2 = new A<int>();
+    b2 = new B<int, float>();
+    a2.out -> b2.in;
+  
 }

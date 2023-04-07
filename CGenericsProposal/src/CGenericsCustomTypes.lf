@@ -5,7 +5,8 @@ target C {
     ],
     files: [
         "../lib/convertor.h",
-        "../lib/convertor.c"
+        "../lib/convertor.c",
+        "../lib/types.h"
     ]
     // fast: true
 }
@@ -27,7 +28,7 @@ reactor Wire<Input, Output> (latency:int(0)){
     reaction(delayed_trigger) -> out {=
         if (is_same_type(delayed_trigger->value, out->value))
         {
-            lf_set(out, delayed_trigger->value);
+            // lf_set(out, delayed_trigger->value);
         }
         else
         {
@@ -38,7 +39,7 @@ reactor Wire<Input, Output> (latency:int(0)){
 }
 
 reactor A {
-    output Aout:int;
+    output Aout:A_t;
     logical action post;
 
     timer t(0, 1sec);
@@ -47,22 +48,27 @@ reactor A {
     =}
 
     reaction(post) -> Aout {=
-        lf_set(Aout, rand());
+        A_t a;
+        a.id = rand();
+        a.height = rand();
+        a.age = rand();
+        sprintf(a.name, "%d%x%x %p", rand(), rand(), rand(), &a);
+        lf_set(Aout, a);
     =}
 }
 
 reactor B {
-    input Bin:float;
+    input Bin:B_t;
 
     reaction(Bin) {=
-        printf("got %f\n", Bin->value);
+        printf("got id:%d height:%f\n", Bin->value.id, Bin->value.height);
     =}
 }
 
 main reactor {
     a = new A();
-    w = new Wire<int, float>(latency=500);
-    w2 = new Wire<long, double>(latency=500);
+    w = new Wire<A_t, B_t>(latency=500);
+    // w2 = new Wire<long, double>(latency=500);
     b = new B();
 
     a.Aout -> w.in;
