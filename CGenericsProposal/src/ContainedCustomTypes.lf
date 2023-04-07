@@ -17,10 +17,7 @@ preamble {=
 
 reactor B<Input, Type> {
     input in:Input;
-    // w = new Wire<Input, Type>(latency=10);
     w = new Wire<A_t, B_t>(latency=500);
-    // w2 = new Wire<long, double>(latency=10);
-    // w = new tmp();
     state req_id:int;
 
     reaction(in) -> w.in {=
@@ -28,7 +25,8 @@ reactor B<Input, Type> {
     =}
 
     reaction(w.out) {=
-        printf("Req#%d ## Converted ## id:%d age:%f\n", self->req_id++, w.out->value.id, w.out->value.height);
+        printf("Req#%d ## Converted ## id:%d age:%f\n",
+         self->req_id++, w.out->value.id, w.out->value.height);
     =}
 }
 reactor Wire<Input, Output> (latency:int(0)){

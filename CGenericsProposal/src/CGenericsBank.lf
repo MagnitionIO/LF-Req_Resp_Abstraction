@@ -1,0 +1,85 @@
+target C {
+    keepalive: true,
+    cmake-include: [
+        "../lib/lib.cmake"
+    ],
+    files: [
+        "../lib/convertor.h",
+        "../lib/convertor.c",
+        "../lib/types.h"
+    ]
+    // fast: true
+}
+
+preamble {=
+#include <stdio.h>
+#include "convertor.h"
+=}
+
+reactor Wire<Input, Output> (latency:int(0), width:int(1)){
+    input[width] in:Input;
+    output[width] out:Output;
+    logical action delayed_trigger:Input;
+    state counter_out:int(0);
+
+    reaction(in) -> delayed_trigger {=
+        for (int i = 0; i < in_width; ++i)
+        {
+            if (in[i]->is_present)
+            {
+                lf_schedule_copy(delayed_trigger, self->latency, &in[i]->value, 1);
+            }
+        }
+    =}
+
+    reaction(delayed_trigger) -> out {=
+        if (is_same_type(delayed_trigger->value, out[0]->value))
+        {
+            lf_set(out[self->counter_out++], delayed_trigger->value);
+        }
+        else
+        {
+            auto_t tmp = DO_CONVERT(Input, Output, delayed_trigger->value);
+            lf_set(out[self->counter_out++], tmp);
+        }
+        if (self->counter_out >= out_width)
+            self->counter_out = 0;
+    =}
+}
+
+reactor A(width:int(1)) {
+    output[width] Aout:int;
+    logical action post;
+    state counter:int(0);
+
+    timer t(0, 1sec);
+    reaction(t) -> post {=
+        lf_schedule(post, 2);
+    =}
+
+    reaction(post) -> Aout {=
+        lf_set(Aout[self->counter++], rand());
+    =}
+}
+
+reactor B(width:int(1)) {
+    input[width] Bin:float;
+    state counter:int(0);
+
+    reaction(Bin) {=
+        for (int i = 0; i < Bin_width; ++i)
+        {
+            if (Bin[i]->is_present)
+                printf("got %f\n", Bin[i]->value);
+        }
+    =}
+}
+
+main reactor {
+    a = new A(width=5);
+    w = new Wire<int, float>(latency=500, width=5);
+    b = new B(width=5);
+
+    a.Aout -> w.in;
+    w.out -> b.Bin;
+}
