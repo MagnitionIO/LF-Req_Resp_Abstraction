@@ -1,0 +1,80 @@
+target Cpp
+
+public preamble {=
+    #include "RequestResponse/request_response.hh"
+=}
+
+bundle ReqRsp<T, V> {
+    input req: Request<T>
+    output rsp: Response<V>
+}
+
+reactor ContextManager<T, V, C> {
+    left = new ReqRsp<std::pair<Request<T>, C>, std::pair<Response<V>, C>>() with right // let the compiler know that left and right are paired
+    right = mirror(new ReqRsp<Request<T>, Response<V>>)
+
+    state context_buffer: {= std::map<unsigned long, C> =}
+
+    reaction (left.req) -> right.req {=
+        const auto& req = left.req.get()->first;
+        const auto& ctx = left.req.get()->second;
+        context_buffer[req.uid()] = ctx;
+        right.req.set(req);
+    =}
+
+    reaction (right.rsp) -> left.rsp {=
+        const auto& rsp = *right.rsp.get();
+        const auto& ctx = context_buffer[rsp.uid()];
+        left.rsp.set(std::make_pair(rsp, ctx));
+    =}
+}
+
+reactor AddService<T, V> {
+    port = new ReqRsp<T, V>()
+
+    logical action delayed_req: Request<T>
+
+    reaction(port.in) -> delayed_req {=
+        auto delay = std::chrono::milliseconds(rand() % 400 + 100);
+        delayed_req.schedule(port.req.get(), delay);
+    =}
+
+    reaction(delayed_req) -> port.rsp {=
+        auto req = request_queue.get();
+        int sum = req->data().first + req->data().second;
+        port.out.set(req.make_response(sum)); // produce response with matching uuid
+    =}
+}
+
+reactor Client<T, V, C> {
+    timer t(0, 100ms)
+    state counter: int(0)
+
+    port alias cm.left // allows connecting to cm.right from outside this reactor
+    
+    cm = new ContextManager<T, V, C>()
+
+    reaction(t) -> cm.req {=
+        auto req = Request(std::make_pair(counter, 42));
+        int c = counter; // This is a weird corner case in C++ where the clojure below 
+        // cannot capture counter by value. Copying it to a local variable helps... 
+        auto callback = [c](int sum) {
+            reactor::log::Info() << "Result: " << c << " + 42 = " << sum;
+        };
+        cm.req.set(std::make_pair(req, callback));
+        reactor::log::Info() << "Client asks what " << counter << " + 42 is";
+        counter++;
+    =}
+
+    reaction(cm.rsp) {=
+        auto const& rsp = cm.rsp.get()->first;
+        auto const& callback = cm.rsp.get.get()->second;
+        callback(rsp.data());
+    =}
+}
+
+main reactor {
+    adder = new AddService<{=std::pair<int, int>=}, int> ()
+    client = new Client<{=std::pair<int, int>=}, int, {=std::function<void(int)>=}>()
+    client.port <> adder.port
+}
