@@ -5,7 +5,8 @@ target C {
     ],
     files: [
         "../lib/convertor.h",
-        "../lib/convertor.c"
+        "../lib/convertor.c",
+        "../lib/types.h"
     ]
     // fast: true
 }

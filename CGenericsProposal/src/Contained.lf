@@ -6,7 +6,8 @@ target C {
     ],
     files: [
         "../lib/convertor.h",
-        "../lib/convertor.c"
+        "../lib/convertor.c",
+        "../lib/types.h"
     ]
 }
 
@@ -61,22 +62,13 @@ reactor A<Output> {
     =}
 }
 
-reactor tmp {
-    input in:int;
-    output out:int;
-
-    reaction(in) -> out {=
-        lf_set(out, in->value);
-    =}
-}
-
 main reactor {
     a = new A<int>();
     b = new B<int, float>();
     a.out -> b.in;
 
-    a2 = new A<int>();
-    b2 = new B<int, float>();
-    a2.out -> b2.in;
+    // a2 = new A<int>();
+    // b2 = new B<int, float>();
+    // a2.out -> b2.in;
   
 }

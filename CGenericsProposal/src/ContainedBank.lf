@@ -67,6 +67,7 @@ reactor B(width:int(1)) {
     state counter:int(0);
     state req_id:int(0);
     w = new Wire<int, float>(latency=500, width=5);
+    w2 = new Wire<int, float>(latency=500, width=5);
 
 
     reaction(Bin) -> w.in {=
