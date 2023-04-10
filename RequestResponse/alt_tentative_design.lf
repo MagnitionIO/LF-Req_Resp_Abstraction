@@ -4,14 +4,23 @@ public preamble {=
     #include "RequestResponse/request_response.hh"
 =}
 
+// declare bundle, which is essentially a reactor without reactions
 bundle ReqRsp<T, V> {
     input req: Request<T>
     output rsp: Response<V>
 }
 
 reactor ContextManager<T, V, C> {
-    left = new ReqRsp<std::pair<Request<T>, C>, std::pair<Response<V>, C>>() with right // let the compiler know that left and right are paired
+    // instantiate bundle
+    left = new ReqRsp<std::pair<Request<T>, C>, std::pair<Response<V>, C>>()
     right = mirror(new ReqRsp<Request<T>, Response<V>>)
+
+    // indicate that data flows from left and right (and back?)
+    // this statement allows left to be alaised by the container
+    // the bundle on the left is seen by the container
+    // the bundle on the right is seen by the container's container
+    // if this statement is omitted, left cannot be aliased by the container
+    left ? right
 
     state context_buffer: {= std::map<unsigned long, C> =}
 
@@ -49,26 +58,27 @@ reactor AddService<T, V> {
 reactor Client<T, V, C> {
     timer t(0, 100ms)
     state counter: int(0)
-
-    port alias cm.left // allows connecting to cm.right from outside this reactor
     
     cm = new ContextManager<T, V, C>()
 
-    reaction(t) -> cm.req {=
+    // aliasing happens here:
+    p = cm.left // expose bundle as part of client interface
+
+    reaction(t) -> p.req {=
         auto req = Request(std::make_pair(counter, 42));
         int c = counter; // This is a weird corner case in C++ where the clojure below 
         // cannot capture counter by value. Copying it to a local variable helps... 
         auto callback = [c](int sum) {
             reactor::log::Info() << "Result: " << c << " + 42 = " << sum;
         };
-        cm.req.set(std::make_pair(req, callback));
+        p.req.set(std::make_pair(req, callback));
         reactor::log::Info() << "Client asks what " << counter << " + 42 is";
         counter++;
     =}
 
-    reaction(cm.rsp) {=
-        auto const& rsp = cm.rsp.get()->first;
-        auto const& callback = cm.rsp.get.get()->second;
+    reaction(p.rsp) {=
+        auto const& rsp = p.rsp.get()->first;
+        auto const& callback = p.rsp.get.get()->second;
         callback(rsp.data());
     =}
 }
@@ -76,5 +86,5 @@ reactor Client<T, V, C> {
 main reactor {
     adder = new AddService<{=std::pair<int, int>=}, int> ()
     client = new Client<{=std::pair<int, int>=}, int, {=std::function<void(int)>=}>()
-    client.port <> adder.port
+    client.port <-> adder.port // note that we need the '-' in between because we might want to use a '~' to indicate a physical connection
 }
