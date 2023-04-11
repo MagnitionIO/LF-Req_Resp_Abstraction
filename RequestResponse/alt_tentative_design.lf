@@ -1,0 +1,90 @@
+target Cpp
+
+public preamble {=
+    #include "RequestResponse/request_response.hh"
+=}
+
+// declare bundle, which is essentially a reactor without reactions
+bundle ReqRsp<T, V> {
+    input req: Request<T>
+    output rsp: Response<V>
+}
+
+reactor ContextManager<T, V, C> {
+    // instantiate bundle
+    left = new ReqRsp<std::pair<Request<T>, C>, std::pair<Response<V>, C>>()
+    right = mirror(new ReqRsp<Request<T>, Response<V>>)
+
+    // indicate that data flows from left and right (and back?)
+    // this statement allows left to be alaised by the container
+    // the bundle on the left is seen by the container
+    // the bundle on the right is seen by the container's container
+    // if this statement is omitted, left cannot be aliased by the container
+    left ? right
+
+    state context_buffer: {= std::map<unsigned long, C> =}
+
+    reaction (left.req) -> right.req {=
+        const auto& req = left.req.get()->first;
+        const auto& ctx = left.req.get()->second;
+        context_buffer[req.uid()] = ctx;
+        right.req.set(req);
+    =}
+
+    reaction (right.rsp) -> left.rsp {=
+        const auto& rsp = *right.rsp.get();
+        const auto& ctx = context_buffer[rsp.uid()];
+        left.rsp.set(std::make_pair(rsp, ctx));
+    =}
+}
+
+reactor AddService<T, V> {
+    port = new ReqRsp<T, V>()
+
+    logical action delayed_req: Request<T>
+
+    reaction(port.in) -> delayed_req {=
+        auto delay = std::chrono::milliseconds(rand() % 400 + 100);
+        delayed_req.schedule(port.req.get(), delay);
+    =}
+
+    reaction(delayed_req) -> port.rsp {=
+        auto req = request_queue.get();
+        int sum = req->data().first + req->data().second;
+        port.out.set(req.make_response(sum)); // produce response with matching uuid
+    =}
+}
+
+reactor Client<T, V, C> {
+    timer t(0, 100ms)
+    state counter: int(0)
+    
+    cm = new ContextManager<T, V, C>()
+
+    // aliasing happens here:
+    p = cm.left // expose bundle as part of client interface
+
+    reaction(t) -> p.req {=
+        auto req = Request(std::make_pair(counter, 42));
+        int c = counter; // This is a weird corner case in C++ where the clojure below 
+        // cannot capture counter by value. Copying it to a local variable helps... 
+        auto callback = [c](int sum) {
+            reactor::log::Info() << "Result: " << c << " + 42 = " << sum;
+        };
+        p.req.set(std::make_pair(req, callback));
+        reactor::log::Info() << "Client asks what " << counter << " + 42 is";
+        counter++;
+    =}
+
+    reaction(p.rsp) {=
+        auto const& rsp = p.rsp.get()->first;
+        auto const& callback = p.rsp.get.get()->second;
+        callback(rsp.data());
+    =}
+}
+
+main reactor {
+    adder = new AddService<{=std::pair<int, int>=}, int> ()
+    client = new Client<{=std::pair<int, int>=}, int, {=std::function<void(int)>=}>()
+    client.port <-> adder.port // note that we need the '-' in between because we might want to use a '~' to indicate a physical connection
+}
