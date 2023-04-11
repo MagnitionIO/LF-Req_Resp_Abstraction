@@ -16,7 +16,7 @@ int convert__int_to__int(int x) { return x; }
 int convert__double_to__int(double x) { return (int)(x); }
 
 int convert__float_to__int(float x) { return (int)(x*5468); }
-double convert__float_to__double(float x) { return (double)(x); }
+double convert__float_to__double(float x) { return (double)(x*575)/37; }
 long convert__float_to__long(float x) { return (long)(x); }
 
 double convert__long_to__double(long x) { return (double)x; };
