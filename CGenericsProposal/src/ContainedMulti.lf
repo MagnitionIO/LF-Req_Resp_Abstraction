@@ -19,6 +19,8 @@ reactor B<Input, Type> {
     input in:Input;
     w = new Wire<int, float>(latency=500);
     w2 = new Wire<float, double>(latency=1000);
+    w3 = new Wire<int, float>(latency=500);
+    w4 = new Wire<float, double>(latency=1000);    
     state req_id:Input;
 
     reaction(in) -> w.in {=
