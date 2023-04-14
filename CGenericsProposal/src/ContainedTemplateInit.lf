@@ -1,0 +1,77 @@
+target C {
+    keepalive: true,
+    // fast: true,
+    cmake-include: [
+        "../lib/lib.cmake"
+    ],
+    files: [
+        "../lib/convertor.h",
+        "../lib/convertor.c",
+        "../lib/types.h"
+    ]
+}
+
+preamble {=
+    #include "convertor.h"
+=}
+
+reactor B<Input, Type> {
+    input in:Input;
+    w = new Wire<Input, Type>(latency=500);
+    w2 = new Wire<Type, Input>(latency=1000);
+    state req_id:Input;
+
+    reaction(in) -> w.in {=
+        lf_set(w.in, in->value);
+    =}
+
+    reaction(w.out) -> w2.in {=
+        printf("Req#%d Converted: %f\n", self->req_id++, w.out->value);
+        lf_set(w2.in, w.out->value);
+    =}
+
+    reaction(w2.out) {=
+        printf("Req#%d Re-Converted: %d\n", self->req_id++, w2.out->value);
+    =}
+}
+reactor Wire<Input, Output> (latency:int(0)){
+    input in:Input;
+    output out:Output;
+    logical action delayed_trigger(0):Input;
+
+    reaction(in) -> delayed_trigger {=
+        lf_schedule_copy(delayed_trigger, self->latency, &in->value, 1);
+    =}
+
+    reaction(delayed_trigger) -> out {=
+        if (is_same_type(delayed_trigger->value, out->value))
+        {
+            lf_set(out, delayed_trigger->value);
+        }
+        else
+        {
+            auto_t tmp = DO_CONVERT(Input, Output, delayed_trigger->value);
+            lf_set(out, tmp);
+        }
+    =}
+}
+
+reactor A<Output> {
+    output out:Output;
+
+    timer t(0, 1sec);
+    reaction(t) -> out {=
+        lf_set(out, rand());
+    =}
+}
+
+main reactor {
+    a = new A<int>();
+    b = new B<int, float>();
+    a.out -> b.in;
+
+    // a2 = new A<int>();
+    // b2 = new B<int, float>();
+    // a2.out -> b2.in;
+  
+}
