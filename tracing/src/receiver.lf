@@ -9,7 +9,6 @@ preamble {=
 
 reactor Reciever {
     input in:int;
-    state ctr:int = 0
 
     reaction(startup) {=
         if (!register_user_trace_event(self, TRACE_STR_REACTOR_R)) {
@@ -19,12 +18,9 @@ reactor Reciever {
     =}
 
     reaction(in) {=
-        if (self->ctr++ < 1000){
-            int val = in->value;
-            tracepoint_user_value(self, TRACE_STR_REACTOR_R, val);
-            printf("%d\n", val);
-        } else {
-            lf_request_stop();
-        }
+        int val = in->value;
+        tracepoint_user_value(self, TRACE_STR_REACTOR_R, val);
+        printf("%d\n", val);
+    
     =}
 }
