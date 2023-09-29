@@ -1,0 +1,24 @@
+target C {
+    tracing: true,
+    fast: true
+}
+
+import A from "A.lf"
+import B from "B.lf"
+import C from "C.lf"
+import Emitter from "emitter.lf"
+import Reciever from "receiver.lf"
+
+main reactor {
+    e = new Emitter();
+    a = new A();
+    b = new B();
+    c = new C();
+    r = new Reciever();
+
+    e.out -> a.in;
+    a.out -> b.in;
+    b.out -> c.in;
+    c.out -> r.in;
+
+}

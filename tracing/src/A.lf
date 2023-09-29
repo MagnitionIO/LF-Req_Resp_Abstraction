@@ -1,0 +1,26 @@
+target C {
+    fast: true,
+    tracing: {trace-file-name: "A"}    
+};
+
+preamble {=
+    #define TRACE_STR_REACTOR_A "RELAY_POINT_A"
+=}
+
+reactor A {
+    input in:int;
+    output out:int;
+
+    reaction(startup) {=
+        if (!register_user_trace_event(self, TRACE_STR_REACTOR_A)) {
+            fprintf(stderr, "ERROR: Failed to register trace event.\n");
+            exit(1);
+        }
+    =}
+
+    reaction(in) -> out {=
+        int val = in->value * 2;
+        tracepoint_user_value(self, TRACE_STR_REACTOR_A, val);
+        lf_set(out, val);
+    =}
+}

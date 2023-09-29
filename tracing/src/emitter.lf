@@ -1,0 +1,28 @@
+target C {
+    fast: true,
+    tracing: {trace-file-name: "emitter"}    
+};
+
+preamble {=
+    #define TRACE_STR_REACTOR_E "RELAY_POINT_Emitter"
+=}
+
+reactor Emitter {
+    output out:int;
+    state ctr:int = 0;
+    timer t(0, 2sec)
+    reaction(startup) {=
+        if (!register_user_trace_event(self, TRACE_STR_REACTOR_E)) {
+            fprintf(stderr, "ERROR: Failed to register trace event.\n");
+            exit(1);
+        }
+    =}
+
+    reaction(t) -> out {=
+        if (self->ctr++ < 1000) {
+            int val = rand();
+            tracepoint_user_value(self, TRACE_STR_REACTOR_E, val);
+            lf_set(out, val);
+        }
+    =}
+}
